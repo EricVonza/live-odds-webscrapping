@@ -148,7 +148,7 @@ def main():
                         logger.info("-" * 40)
 
                         message = f"{match} | 2Q pts: OV{estimated_2q_points} "
-                        send_payload(message)
+                        #send_payload(message)
 
         time.sleep(10)
 
