@@ -15,7 +15,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Obfuscated  and room ID
+
 _encoded_url = b'aHR0cHM6Ly9hcGkudGVsZWdyYW0ub3JnL2JvdDc2NzMwNzIyODc6QUFFOHp3VW96Ykcxb051UEM3OURTUl k5NGJfT1doaDJXcDgvc2VuZE1lc3NhZ2U='
 _encoded_room = b'LTAwMjE3MDM3NzM2OA=='
 
@@ -40,11 +40,11 @@ def fetch_html(url):
 
 #  Extract Match Info
 def extract_matches(html_content):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    matches = soup.find_all(class_='c-events__name')
+    soup = BeautifulSoup(html_content, 'html.parser') 
+    matches = soup.find_all(class_='betting-main-dashboard')   # where all the matches are found
     teams_list = []
     for idx, match in enumerate(matches, start=1):
-        teams = match.find('span', class_='c-events__teams')
+        teams = match.find('span', class_='dashboard__champs')
         if teams:
             teams_text = teams.text.strip().replace("Including Overtime", "")
             teams_text = " ".join(teams_text.split())
@@ -54,13 +54,13 @@ def extract_matches(html_content):
 # Extract Scores and Quarters
 def extract_scores_and_quarters(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
-    target_elements = soup.find_all('div', class_='c-events-scoreboard__line')
+    target_elements = soup.find_all('div', class_='ui-game-scores--size-m ui-game-scores--theme-gray-100 ui-game-scores')
     games = []
     i = 0
     while i < len(target_elements):
         try:
-            team1_scores = [span.get_text(strip=True) for span in target_elements[i].find_all('span', class_='c-events-scoreboard__cell')]
-            team2_scores = [span.get_text(strip=True) for span in target_elements[i + 1].find_all('span', class_='c-events-scoreboard__cell')]
+            team1_scores = [span.get_text(strip=True) for span in target_elements[i].find_all('span', class_='ui-game-scores--size-m ui-game-scores--theme-gray-100 ui-game-scores')]
+            team2_scores = [span.get_text(strip=True) for span in target_elements[i + 1].find_all('span', class_='ui-game-scores--size-m ui-game-scores--theme-gray-100 ui-game-scores')]
 
             if not team1_scores:
                 team1_scores = ["0"]
