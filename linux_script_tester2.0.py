@@ -4,299 +4,206 @@ import time
 import logging
 import base64
 
-# -------------------------------------------
-# Logging configuration
-# -------------------------------------------
+# ------------------ LOGGING ------------------
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------
-# Constants
-# -------------------------------------------
+# ------------------ CONFIG ------------------
+_encoded_url = b'aHR0cHM6Ly9hcGkudGVsZWdyYW0ub3JnL2JvdDc2NzMwNzIyODc6QUFFOHp3VW96Ykcxb051UEM3OURTUl k5NGJfT1doaDJXcDgvc2VuZE1lc3NhZ2U='
+_encoded_room = b'LTAwMjE3MDM3NzM2OA=='
+
 URL = "https://1xbet.global/en/live/basketball"
+EPL_URL = base64.b64decode(_encoded_url).decode()
+ROOM_ID = base64.b64decode(_encoded_room).decode()
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0'
+    'User-Agent': 'Mozilla/5.0'
 }
 
-# -------------------------------------------
-# Telegram Configuration (OBFUSCATED)
-# -------------------------------------------
-def _d(s: str) -> str:
-    return base64.b64decode(s).decode()
-
-T_URL = _d(
-    "aHR0cHM6Ly9hcGkudGVsZWdyYW0ub3JnL2JvdDc2NzMwNzIyODc6QUFFOHp3VW96Ykcx"
-    "b051UEM3OURTUl k5NGJfT1doaDJXcDgvc2VuZE1lc3NhZ2U=".replace(" ", "")
-)
-
-ROOM_ID = _d("LTEwMDIxNzAzNzczNjg=")
-
-# -------------------------------------------
-# PER-GAME Low Quarter Alert Tracking
-# -------------------------------------------
-low_quarter_alerts_sent = {}
-MAX_LOW_QUARTER_ALERTS = 4
-
-# -------------------------------------------
-# Fetch HTML
-# -------------------------------------------
+# ------------------ FETCH ------------------
 def fetch_html(url):
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        logger.info("Fetched HTML content successfully.")
-        return response.content
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching data: {e}")
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        return response.text
+    except Exception as e:
+        logger.error(f"Fetch error: {e}")
         return None
 
-# -------------------------------------------
-# Extract Match Info
-# -------------------------------------------
-def extract_matches(html_content):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    matches = soup.find_all(class_='c-events__name')
-    teams_list = []
-
-    for match in matches:
-        teams = match.find('span', class_='c-events__teams')
-        if teams:
-            team_names = [
-                s.strip() for s in teams.stripped_strings
-                if s.strip() and "Including Overtime" not in s
-            ]
-            if len(team_names) >= 2:
-                teams_text = " vs ".join(team_names[:2])
-            else:
-                teams_text = " ".join(team_names)
-            teams_text = " ".join(teams_text.split())
-            teams_list.append(teams_text)
-
-    return teams_list
-
-# -------------------------------------------
-# Extract Scores and Quarters
-# -------------------------------------------
-def extract_scores_and_quarters(html_content):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    target_elements = soup.find_all('div', class_='c-events-scoreboard__line')
+# ------------------ PARSE ------------------
+def extract_games(html):
+    soup = BeautifulSoup(html, 'html.parser')
     games = []
-    i = 0
 
-    while i < len(target_elements):
+    match_blocks = soup.select('div[class*="dashboard"], div[class*="event"]')
+
+    for block in match_blocks:
         try:
-            team1_scores = [
-                span.get_text(strip=True)
-                for span in target_elements[i].find_all('span', class_='c-events-scoreboard__cell')
+            teams = block.select('span.ui-caption')
+            if len(teams) < 2:
+                continue
+
+            team1_name = teams[0].get_text(strip=True)
+            team2_name = teams[1].get_text(strip=True)
+
+            scores = [
+                int(s.get_text(strip=True))
+                for s in block.select('.ui-game-scores__num')
+                if s.get_text(strip=True).isdigit()
             ]
-            team2_scores = [
-                span.get_text(strip=True)
-                for span in target_elements[i + 1].find_all('span', class_='c-events-scoreboard__cell')
-            ]
 
-            if not team1_scores:
-                team1_scores = ["0"]
-            if not team2_scores:
-                team2_scores = ["0"]
+            if len(scores) < 2:
+                continue
 
-            team1 = {
-                'total_score': team1_scores[0],
-                'quarters': team1_scores[1:] if len(team1_scores) > 1 else ["0"]
-            }
-            team2 = {
-                'total_score': team2_scores[0],
-                'quarters': team2_scores[1:] if len(team2_scores) > 1 else ["0"]
-            }
+            # totals
+            t1_total = scores[0]
+            t2_total = scores[1]
 
-            games.append((team1, team2))
-            i += 2
+            # quarters
+            quarter_scores = scores[2:]
 
-        except IndexError:
-            games.append((
-                {'total_score': "0", 'quarters': ["0"]},
-                {'total_score': "0", 'quarters': ["0"]}
-            ))
-            i += 2
+            t1_quarters = []
+            t2_quarters = []
+
+            for i in range(0, len(quarter_scores), 2):
+                if i + 1 < len(quarter_scores):
+                    t1_quarters.append(quarter_scores[i])
+                    t2_quarters.append(quarter_scores[i + 1])
+
+            # TIMER + PERIOD
+            time_block = block.select_one('.ui-game-timer, .scoreboard-timer, .event__stage')
+            period_text = ""
+            game_time = ""
+
+            if time_block:
+                txt = time_block.get_text(" ", strip=True)
+                parts = txt.split()
+
+                for part in parts:
+                    if ":" in part:
+                        game_time = part
+                    elif "Q" in part.upper():
+                        period_text = part.upper()
+
+            games.append({
+                "match": f"{team1_name} vs {team2_name}",
+                "team1": {
+                    "total": t1_total,
+                    "quarters": t1_quarters
+                },
+                "team2": {
+                    "total": t2_total,
+                    "quarters": t2_quarters
+                },
+                "period": period_text,
+                "time": game_time
+            })
+
+        except Exception:
+            continue
 
     return games
 
-# -------------------------------------------
-# Extract Timer Info
-# -------------------------------------------
-def extract_timer(html_content):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    timer_elements = soup.find_all(class_='c-events-scoreboard__subitem')
-
-    timers = []
-    for timer in timer_elements:
-        time_element = timer.find(class_='c-events__time')
-        quarter_element = timer.find(class_='c-events__overtime')
-
-        timer_text = time_element.get_text(strip=True) if time_element else "No timer info"
-        quarter_text = quarter_element.get_text(strip=True) if quarter_element else "No quarter info"
-
-        timers.append(f"{timer_text} | {quarter_text}")
-
-    if not timers:
-        timers = ["No timer info | No quarter info"]
-
-    return timers
-
-# -------------------------------------------
-# 🔥 FIXED LEAGUE EXTRACTOR (Bullet-proof)
-# -------------------------------------------
-def extract_leagues(html_content):
-    """
-    Extract leagues in correct order aligned with matches.
-    Works with 1xbet's real DOM structure.
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    container = soup.find("div", class_="c-events")
-    if not container:
-        return ["No league info"]
-
-    leagues_expanded = []
-    current_league = "No league info"
-
-    # iterate through direct children in order
-    for el in container.find_all(recursive=False):
-
-        # league header
-        if el.has_attr("class") and "c-events__liga" in el["class"]:
-            title = el.get("title") or el.get_text(strip=True)
-            current_league = title.strip() if title else "No league info"
-            continue
-
-        # match row
-        if el.find(class_="c-events__teams"):
-            leagues_expanded.append(current_league)
-
-    if not leagues_expanded:
-        leagues_expanded = ["No league info"]
-
-    return leagues_expanded
-
-# -------------------------------------------
-# Send Telegram Message
-# -------------------------------------------
-def send_telegram_message(message):
+# ------------------ TELEGRAM ------------------
+def send_payload(message):
     try:
-        response = requests.post(
-            T_URL,
-            data={'chat_id': ROOM_ID, 'text': message},
-            timeout=10
-        )
-
-        if response.status_code == 200:
-            logger.info("Telegram message sent successfully.")
-        else:
-            logger.error(f"Telegram send failed: {response.status_code} - {response.text}")
-
+        requests.post(EPL_URL, data={
+            'chat_id': ROOM_ID,
+            'text': message
+        })
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
-# -------------------------------------------
-# Main Logic (with leagues)
-# -------------------------------------------
+# ------------------ MAIN ------------------
 def main():
+    alerted = set()
+    last_heartbeat = time.time()
+
     while True:
-        html_content = fetch_html(URL)
+        html = fetch_html(URL)
 
-        if html_content:
-            matches = extract_matches(html_content)
-            games = extract_scores_and_quarters(html_content)
-            timers = extract_timer(html_content)
-            leagues = extract_leagues(html_content)
+        if not html:
+            logger.warning("❌ Failed to fetch HTML")
+            time.sleep(5)
+            continue
 
-            max_len = max(len(matches), len(games), len(timers), len(leagues))
-            matches += ["No match data"] * (max_len - len(matches))
-            games += [({}, {})] * (max_len - len(games))
-            timers += ["Timer: No timer info | Quarter: No quarter info"] * (max_len - len(timers))
-            leagues += ["No league info"] * (max_len - len(leagues))
+        # HEARTBEAT
+        now = time.time()
+        if now - last_heartbeat >= 15:
+            logger.info("HTML fetched successfully")
+            last_heartbeat = now
 
-            filtered = [
-                (m, g, t, l)
-                for m, g, t, l in zip(matches, games, timers, leagues)
-                if "women" not in m.lower()
-            ]
+        games = extract_games(html)
+        logger.info(f"Live games found: {len(games)}")
 
-            for match, (team1, team2), timer, league in filtered:
-                timer_lower = timer.lower()
-                match_key = match
+        for game in games:
+            t1_q = game["team1"]["quarters"]
+            t2_q = game["team2"]["quarters"]
 
-                if match_key not in low_quarter_alerts_sent:
-                    low_quarter_alerts_sent[match_key] = 0
+            period = game.get("period", "")
+            time_str = game.get("time", "")
 
-                # LOW QUARTER ALERT
-                previous_q = None
-                if "2nd quarter" in timer_lower:
-                    previous_q = 0
-                elif "3rd quarter" in timer_lower:
-                    previous_q = 1
-                elif "4th quarter" in timer_lower:
-                    previous_q = 2
-                elif "overtime" in timer_lower:
-                    previous_q = 3
+            # 🐢 SLOW START (CHECK Q1 WHILE IN 2Q)
+            if period == "2Q" and time_str.startswith("15:"):
+                if len(t1_q) >= 1 and len(t2_q) >= 1:
 
-                if previous_q is not None and low_quarter_alerts_sent[match_key] < MAX_LOW_QUARTER_ALERTS:
-                    try:
-                        t1_q = int(team1["quarters"][previous_q]) if team1["quarters"][previous_q].isdigit() else 0
-                        t2_q = int(team2["quarters"][previous_q]) if team2["quarters"][previous_q].isdigit() else 0
-                    except:
-                        t1_q = t2_q = 0
+                    q1_t1 = t1_q[0]
+                    q1_t2 = t2_q[0]
 
-                    if t1_q < 12 or t2_q < 12:
-                        send_telegram_message(
-                            f"⚠️ Low Quarter Alert\nLeague : {league}\n{match}\n{timer}\n"
-                            f"Previous Q{previous_q + 1}: T1 {t1_q} pts vs T2 {t2_q} pts"
-                        )
-                        low_quarter_alerts_sent[match_key] += 1
+                    if q1_t1 < 8 or q1_t2 < 8:
+                        game_id = game["match"] + "_slow_start"
 
-                # 2Q ESTIMATION
-                first_quarter_sum = sum(
-                    int(q) for q in team1.get('quarters', ['0'])[:1] +
-                        team2.get('quarters', ['0'])[:1] if q.isdigit()
-                )
+                        if game_id not in alerted:
+                            alerted.add(game_id)
 
-                time_patterns = ["12:5", "13:0", "13:1", "16:5", "17:", "07:", "06:", "22:5", "23:"]
-                has_time_pattern = any(x in timer for x in time_patterns)
-                has_2nd = "2nd quarter" in timer_lower
-                has_3rd = "3rd quarter" in timer_lower
+                            msg = f"{game['match']} | Slow start Q1: {q1_t1}-{q1_t2} (2Q 15:00)"
 
-                second_quarter_sum = 0
+                            logger.info("🐢 SLOW START DETECTED")
+                            logger.info(msg)
+                            logger.info("-" * 40)
 
-                if first_quarter_sum < 50 and has_2nd and has_time_pattern:
-                    second_quarter_sum = sum(
-                        int(q) for q in team1.get('quarters', ['0'])[1:2] +
-                        team2.get('quarters', ['0'])[1:2] if q.isdigit()
-                    )
-                    estimated_2q_points = second_quarter_sum * 3
+                            # send_payload(msg)
 
-                    if estimated_2q_points < 45:
-                        send_telegram_message(f"League :{league} | {match} | 2Q pts: OV{estimated_2q_points}")
+            # 🔥 LOW SCORING LOGIC (needs 2 completed quarters)
+            if len(t1_q) < 2 or len(t2_q) < 2:
+                continue
 
-                # 3Q ESTIMATION
-                if has_3rd and has_time_pattern and 0 < second_quarter_sum < 31:
-                    third_quarter_sum = sum(
-                        int(q) for q in team1.get('quarters', ['0'])[2:3] +
-                        team2.get('quarters', ['0'])[2:3] if q.isdigit()
+            prev_index = min(len(t1_q), len(t2_q)) - 2
+            t1_prev = t1_q[prev_index]
+            t2_prev = t2_q[prev_index]
+
+            # exclude 0-0
+            if (t1_prev < 14 or t2_prev < 14) and not (t1_prev == 0 and t2_prev == 0):
+                game_id = game["match"]
+
+                if game_id not in alerted:
+                    alerted.add(game_id)
+
+                    total_prev = t1_prev + t2_prev
+
+                    # ⚠️ DISCLAIMER LOGIC
+                    disclaimer = ""
+                    if total_prev > 38:
+                        disclaimer = " ⚠️ Low probability (high total quarter)"
+
+                    # 🔮 PREDICTOR LOGIC
+                    predicted_total = total_prev - 4
+
+                    msg = (
+                        f"{game['match']} | Low Q score: {t1_prev}-{t2_prev}"
+                        f"{disclaimer} | 🔮 Predicted next Q total: {predicted_total}"
                     )
 
-                    estimated_3q_points = third_quarter_sum * 3
+                    logger.info("Previous Low Scoring Quarter Detected")
+                    logger.info(msg)
+                    logger.info("-" * 40)
 
-                    if estimated_3q_points < 45:
-                        send_telegram_message(f"League :{league} | {match} | 3Q pts: OV{estimated_3q_points}")
+                    # send_payload(msg)
 
-        time.sleep(12.5)
+        time.sleep(10)
 
-# -------------------------------------------
-# Entrypoint
-# -------------------------------------------
+# ------------------ RUN ------------------
 if __name__ == "__main__":
     main()

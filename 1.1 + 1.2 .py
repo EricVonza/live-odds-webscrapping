@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 
-URL = "https://1xbet.com/en/live/basketball"
+URL = "https://1xbet.global/en/live/basketball"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36'
 }

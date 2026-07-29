@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 
 # URL of the website to scrape
-url = "https://1xbet.com/en/live/basketball"
+url = "https://1xbet.global/en/live/basketball"
 
 # Set headers to mimic a real browser request
 headers = {
